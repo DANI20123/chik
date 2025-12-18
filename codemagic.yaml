@@ -2,65 +2,86 @@ workflows:
   unity-android-workflow:
     name: Unity Android Build
     triggering:
-      events: []
+      events: []  # Только ручной запуск
     
     environment:
-      unity: "2022.3.62f3"
+      os: macos  # Собираем на Mac (там больше версий)
+      
+      # Группы с секретными данными (настраиваются в интерфейсе CodeMagic)
       groups:
-        - unity_credentials
+        - unity_credentials  # Должна содержать: UNITY_SERIAL, UNITY_USERNAME, UNITY_PASSWORD
+        - android_signing    # Для подписи APK (пока можно не настраивать)
+      
+      # Твои переменные (подставятся в скрипты)
       vars:
-        PROJECT_NAME: "ChikenLine"  # Без пробелов!
+        PROJECT_NAME: "ChikenLine"     # Без пробелов!
         BUNDLE_ID: "com.line.egg"
         VERSION_NAME: "1.0.0"
         VERSION_CODE: "1"
-        UNITY_VERSION: "2022.3.62f3"  # ДОБАВЬ ЭТУ СТРОЧКУ!
+        # UNITY_VERSION будет взят из окружения CodeMagic
     
+    # САМАЯ ВАЖНАЯ ЧАСТЬ - СКРИПТЫ
     scripts:
-      # 1. АКТИВАЦИЯ ЛИЦЕНЗИИ (ИСПРАВЛЕННАЯ)
+      # 1. АКТИВАЦИЯ ЛИЦЕНЗИИ (РАБОЧИЙ ВАРИАНТ)
       - name: Activate Unity License
         script: |
-          echo "📱 Активация лицензии Unity..."
-          echo "Serial: ${UNITY_SERIAL:0:10}..."
+          echo "=== АКТИВАЦИЯ ЛИЦЕНЗИИ UNITY ==="
           
-          # Возвращаем текущую лицензию
-          echo "Возвращаем текущую лицензию..."
-          /Users/Shared/Unity/Hub/Editor/$UNITY_VERSION/Unity.app/Contents/MacOS/Unity \
-            -batchmode -nographics -quit -returnlicense \
-            -logFile /tmp/return.log 2>&1 || true
+          # Путь к установленной Unity на Mac в CodeMagic
+          UNITY_PATH="/Applications/Unity/Hub/Editor/$(cat /Users/builder/unity_version)/Unity.app/Contents/MacOS/Unity"
+          echo "Путь к Unity: $UNITY_PATH"
           
-          sleep 3
+          # 1. Возвращаем старую лицензию (если есть)
+          echo "Шаг 1: Возвращаем лицензию..."
+          $UNITY_PATH -batchmode -nographics -quit -returnlicense -logFile /tmp/unity_return.log 2>&1 || true
+          echo "Готово"
           
-          # Активируем новую лицензию
-          echo "Активируем лицензию..."
-          /Users/Shared/Unity/Hub/Editor/$UNITY_VERSION/Unity.app/Contents/MacOS/Unity \
+          sleep 2
+          
+          # 2. Активируем новую лицензию
+          echo "Шаг 2: Активируем с серийным номером..."
+          $UNITY_PATH \
             -batchmode \
             -nographics \
             -quit \
             -serial "$UNITY_SERIAL" \
             -username "$UNITY_USERNAME" \
             -password "$UNITY_PASSWORD" \
-            -logFile /tmp/activate.log \
+            -logFile /tmp/unity_activate.log \
             2>&1
           
+          # 3. Проверяем результат
           ACTIVATION_RESULT=$?
-          echo "Код выхода: $ACTIVATION_RESULT"
+          echo "Код выхода Unity: $ACTIVATION_RESULT"
           
           if [ $ACTIVATION_RESULT -eq 0 ]; then
-            echo "✅ Лицензия активирована!"
+            echo "✅ ЛИЦЕНЗИЯ АКТИВИРОВАНА УСПЕШНО!"
             echo "Последние строки лога:"
-            tail -10 /tmp/activate.log
+            tail -5 /tmp/unity_activate.log
           else
-            echo "❌ Ошибка активации! Лог:"
-            cat /tmp/activate.log
+            echo "❌ ОШИБКА АКТИВАЦИИ ЛИЦЕНЗИИ!"
+            echo "=== ПОЛНЫЙ ЛОГ ОШИБКИ ==="
+            cat /tmp/unity_activate.log
+            echo "=== КОНЕЦ ЛОГА ==="
+            
+            # Подсказки по частым ошибкам
+            if grep -i "invalid" /tmp/unity_activate.log; then
+              echo "ВОЗМОЖНАЯ ПРИЧИНА: Неверный серийный номер, логин или пароль"
+            elif grep -i "already in use" /tmp/unity_activate.log; then
+              echo "ВОЗМОЖНАЯ ПРИЧИНА: Лицензия уже используется на другом компьютере"
+            fi
+            
             exit 1
           fi
       
-      # 2. Сборка AAB
-      - name: Build Android App Bundle
+      # 2. СБОРКА AAB (ДЛЯ GOOGLE PLAY)
+      - name: Build Android App Bundle (AAB)
         script: |
-          echo "📦 Сборка AAB..."
+          echo "=== СБОРКА AAB ФАЙЛА ==="
           
-          /Users/Shared/Unity/Hub/Editor/$UNITY_VERSION/Unity.app/Contents/MacOS/Unity \
+          UNITY_PATH="/Applications/Unity/Hub/Editor/$(cat /Users/builder/unity_version)/Unity.app/Contents/MacOS/Unity"
+          
+          $UNITY_PATH \
             -batchmode \
             -nographics \
             -quit \
@@ -68,23 +89,28 @@ workflows:
             -outputPath "$CM_BUILD_DIR/$PROJECT_NAME.aab" \
             -buildTarget "Android" \
             -androidAppBundle "true" \
-            -logFile "$CM_BUILD_DIR/build.log"
+            -logFile "$CM_BUILD_DIR/build_aab.log" \
+            2>&1
           
           if [ -f "$CM_BUILD_DIR/$PROJECT_NAME.aab" ]; then
-            echo "✅ AAB готов!"
-            ls -la "$CM_BUILD_DIR/$PROJECT_NAME.aab"
+            echo "✅ AAB УСПЕШНО СОБРАН!"
+            echo "Размер: $(du -h "$CM_BUILD_DIR/$PROJECT_NAME.aab" | cut -f1)"
+            echo "Путь: $CM_BUILD_DIR/$PROJECT_NAME.aab"
           else
-            echo "❌ Ошибка сборки AAB"
-            cat "$CM_BUILD_DIR/build.log"
+            echo "❌ ОШИБКА ПРИ СБОРКЕ AAB"
+            echo "Лог ошибок:"
+            cat "$CM_BUILD_DIR/build_aab.log"
             exit 1
           fi
       
-      # 3. Сборка APK
-      - name: Build APK
+      # 3. СБОРКА APK (ДЛЯ ТЕСТИРОВАНИЯ)
+      - name: Build APK for Testing
         script: |
-          echo "📱 Сборка APK..."
+          echo "=== СБОРКА APK ФАЙЛА ==="
           
-          /Users/Shared/Unity/Hub/Editor/$UNITY_VERSION/Unity.app/Contents/MacOS/Unity \
+          UNITY_PATH="/Applications/Unity/Hub/Editor/$(cat /Users/builder/unity_version)/Unity.app/Contents/MacOS/Unity"
+          
+          $UNITY_PATH \
             -batchmode \
             -nographics \
             -quit \
@@ -92,20 +118,25 @@ workflows:
             -outputPath "$CM_BUILD_DIR/$PROJECT_NAME.apk" \
             -buildTarget "Android" \
             -androidAppBundle "false" \
-            -logFile "$CM_BUILD_DIR/build_apk.log"
+            -logFile "$CM_BUILD_DIR/build_apk.log" \
+            2>&1
           
           if [ -f "$CM_BUILD_DIR/$PROJECT_NAME.apk" ]; then
-            echo "✅ APK готов!"
-            ls -la "$CM_BUILD_DIR/$PROJECT_NAME.apk"
+            echo "✅ APK УСПЕШНО СОБРАН!"
+            echo "Размер: $(du -h "$CM_BUILD_DIR/$PROJECT_NAME.apk" | cut -f1)"
+            echo "Путь: $CM_BUILD_DIR/$PROJECT_NAME.apk"
           else
-            echo "❌ Ошибка сборки APK"
+            echo "❌ ОШИБКА ПРИ СБОРКЕ APK"
+            echo "Лог ошибок:"
             cat "$CM_BUILD_DIR/build_apk.log"
             exit 1
           fi
     
+    # ЧТО СОХРАНИТЬ ПОСЛЕ СБОРКИ
     artifacts:
       - "$CM_BUILD_DIR/*.aab"
       - "$CM_BUILD_DIR/*.apk"
       - "$CM_BUILD_DIR/*.log"
+      - "/tmp/unity_*.log"
     
-   
+    
