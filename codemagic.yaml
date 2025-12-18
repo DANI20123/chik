@@ -1,0 +1,118 @@
+# Codemagic YAML для Unity Android сборки
+# Документация: https://docs.codemagic.io/yaml/yaml-getting-started/
+
+# Настройки рабочего процесса
+workflows:
+  unity-android-workflow:
+    name: Unity Android Build
+    # Отключаем сборку при каждом пуше (включаем вручную)
+    triggering:
+      events:
+        - manual
+    
+    # Среда выполнения
+    environment:
+      # Группы переменных (настроим позже в CodeMagic)
+      groups:
+        - unity_credentials  # Для активации Unity
+        - android_signing    # Для подписи приложения
+      
+      # Версия Unity (ЗАМЕНИ НА СВОЮ!)
+      unity:
+        version: 2022.3.62f3
+      
+      # Переменные
+      vars:
+        # Имя проекта (можно менять)
+        PROJECT_NAME: "Chiken Line"
+        # Имя пакета (ДОЛЖНО совпадать с Package Name в Unity!)
+        BUNDLE_ID: "com.line.egg"
+        # Версия (будет увеличена автоматически)
+        VERSION_NAME: "1.0.0"
+    
+    # Скрипты сборки
+    scripts:
+      # 1. Активация Unity лицензии
+      - name: Activate Unity License
+        script: |
+          echo "📱 Activating Unity license..."
+          unity-editor \
+            -batchmode \
+            -nographics \
+            -quit \
+            -logFile /tmp/unity_activate.log \
+            -serial "$UNITY_SERIAL" \
+            -username "$UNITY_USERNAME" \
+            -password "$UNITY_PASSWORD"
+          
+          # Проверяем успешность активации
+          if grep -q "Failed to activate" /tmp/unity_activate.log; then
+            echo "❌ Unity license activation failed"
+            cat /tmp/unity_activate.log
+            exit 1
+          else
+            echo "✅ Unity license activated successfully"
+          fi
+      
+      # 2. Сборка AAB (для Google Play)
+      - name: Build Android App Bundle (AAB)
+        script: |
+          echo "📦 Building AAB file..."
+          unity-editor \
+            -batchmode \
+            -nographics \
+            -quit \
+            -executeMethod BuildCommand.PerformBuild \
+            -outputPath "$CM_BUILD_DIR/$PROJECT_NAME.aab" \
+            -buildTarget "Android" \
+            -androidAppBundle "true" \
+            -development "false" \
+            -logFile /tmp/unity_build_aab.log
+          
+          # Проверка сборки
+          if [ -f "$CM_BUILD_DIR/$PROJECT_NAME.aab" ]; then
+            echo "✅ AAB build successful!"
+            ls -la "$CM_BUILD_DIR/$PROJECT_NAME.aab"
+          else
+            echo "❌ AAB build failed"
+            cat /tmp/unity_build_aab.log
+            exit 1
+          fi
+      
+      # 3. Сборка APK (arm64)
+      - name: Build APK (ARM64)
+        script: |
+          echo "📱 Building APK file..."
+          unity-editor \
+            -batchmode \
+            -nographics \
+            -quit \
+            -executeMethod BuildCommand.PerformBuild \
+            -outputPath "$CM_BUILD_DIR/$PROJECT_NAME.apk" \
+            -buildTarget "Android" \
+            -androidAppBundle "false" \
+            -development "false" \
+            -logFile /tmp/unity_build_apk.log
+          
+          # Проверка сборки
+          if [ -f "$CM_BUILD_DIR/$PROJECT_NAME.apk" ]; then
+            echo "✅ APK build successful!"
+            ls -la "$CM_BUILD_DIR/$PROJECT_NAME.apk"
+          else
+            echo "❌ APK build failed"
+            cat /tmp/unity_build_apk.log
+            exit 1
+          fi
+    
+    # Артефакты (что сохраняем после сборки)
+    artifacts:
+      - "$CM_BUILD_DIR/*.aab"
+      - "$CM_BUILD_DIR/*.apk"
+      - "/tmp/unity_*.log"  # Логи для дебага
+ 
+      
+      # Можно добавить загрузку в Google Play (позже)
+      # google_play:
+      #   credentials: $GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
+      #   track: internal
+      #   in_app_update_priority: 0
