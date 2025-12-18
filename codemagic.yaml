@@ -29,33 +29,54 @@ workflows:
     
     # Скрипты сборки
     scripts:
-      # 1. Активация лицензии Unity
-      - name: Activate Unity License
-        script: |
-          echo "📱 Активация лицензии Unity..."
+          # 1. Активация лицензии Unity (ИСПРАВЛЕННЫЙ ВАРИАНТ)
+    - name: Activate Unity License
+      script: |
+        echo "📱 Активация лицензии Unity..."
+        echo "Serial: ${UNITY_SERIAL:0:10}..."  # Логируем только начало для безопасности
+        
+        # ВАЖНО: Сначала ВСЕГДА возвращаем лицензию (если она есть)
+        echo "Возвращаем текущую лицензию..."
+        unity-editor -batchmode -nographics -quit -returnlicense -logFile /tmp/return.log 2>&1 || true
+        
+        # Ждем немного
+        sleep 5
+        
+        # Теперь активируем новую лицензию
+        echo "Активируем лицензию..."
+        /Users/Shared/Unity/Hub/Editor/$UNITY_VERSION/Unity.app/Contents/MacOS/Unity \
+          -batchmode \
+          -nographics \
+          -quit \
+          -serial "$UNITY_SERIAL" \
+          -username "$UNITY_USERNAME" \
+          -password "$UNITY_PASSWORD" \
+          -logFile /tmp/activate.log \
+          2>&1
+        
+        # Проверяем результат
+        ACTIVATION_RESULT=$?
+        echo "Код выхода Unity: $ACTIVATION_RESULT"
+        
+        if [ $ACTIVATION_RESULT -eq 0 ]; then
+          echo "✅ Лицензия активирована успешно!"
+          echo "Последние строки лога:"
+          tail -20 /tmp/activate.log
+        else
+          echo "❌ Ошибка активации! Полный лог:"
+          cat /tmp/activate.log
           
-          # Сначала попробуем вернуть лицензию, если она есть
-          unity-editor -batchmode -nographics -quit -returnlicense -logFile /tmp/unity_return.log 2>/dev/null || true
-          
-          # Активируем лицензию
-          unity-editor \
-            -batchmode \
-            -nographics \
-            -quit \
-            -logFile /tmp/unity_activate.log \
-            -serial "$UNITY_SERIAL" \
-            -username "$UNITY_USERNAME" \
-            -password "$UNITY_PASSWORD" \
-            > /tmp/unity_output.log 2>&1
-          
-          # Проверяем успешность активации
-          if [ $? -eq 0 ]; then
-            echo "✅ Лицензия Unity активирована успешно"
-          else
-            echo "❌ Ошибка активации лицензии Unity"
-            cat /tmp/unity_activate.log
-            exit 1
+          # Проверяем частые ошибки
+          if grep -q "Invalid username or password" /tmp/activate.log; then
+            echo "ОШИБКА: Неверный логин или пароль Unity"
+          elif grep -q "Failed to activate" /tmp/activate.log; then
+            echo "ОШИБКА: Проблема с серийным номером"
+          elif grep -q "license is already in use" /tmp/activate.log; then
+            echo "ОШИБКА: Лицензия уже используется на другом компе"
           fi
+          
+          exit 1
+        fi
       
       # 2. Сборка AAB (App Bundle)
       - name: Build Android App Bundle (AAB)
